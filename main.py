@@ -1031,6 +1031,7 @@ def cwh_delivery_details_by_location():
 
 @app.route('/item_full_transaction_api', methods=['POST', 'GET'])
 def item_full_transaction():
+    print('calling [item_full_transaction_api] api ...')
     if request.method == 'POST':
         month = request.form.get('month')
         year = request.form.get('year')

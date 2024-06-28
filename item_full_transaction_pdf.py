@@ -283,6 +283,8 @@ def draw_header_and_details(c, width, height, formatted_date, person_name):
 def create_item_full_trans_pdf(new_dfs_list, item_id_list, item_name_list, packing_list, opening_qty_list,
                                formatted_date,
                                opening_cp_list, bal_qty_total_list, bal_val_total_list):
+    initial_bal_qty = 0
+    initial_bal_val = 0
     file_name = None
     file_with_path = None
     try:
@@ -411,7 +413,8 @@ def create_item_full_trans_pdf(new_dfs_list, item_id_list, item_name_list, packi
 
                 c.setFont("Helvetica-Bold", 8)
                 c.drawString(x_item_id + 14.4 * cm, text_y, "Closing :")
-
+                initial_bal_qty = initial_bal_val + bal_qty
+                initial_bal_val = initial_bal_val + bal_val
                 c.drawString(x_item_id + 16.8 * cm, text_y, str(bal_qty))
                 c.drawString(x_item_id + 18.8 * cm, text_y, str(bal_val))
                 text_y -= 20
@@ -432,6 +435,23 @@ def create_item_full_trans_pdf(new_dfs_list, item_id_list, item_name_list, packi
                 rect_y, top_margin, left_margin, bottom_margin, right_margin, rect_x, rect_height, rect_width = draw_header_and_details(
                     c, width, height, formatted_date, person_name)
                 text_y = rect_y - 20
+
+        available_space = text_y - bottom_margin
+        print('available_space', available_space)
+        if available_space < 0.8 * cm:
+            c.showPage()
+            # Draw header and details
+            rect_y, top_margin, left_margin, bottom_margin, right_margin, rect_x, rect_height, rect_width = draw_header_and_details(
+                c, width, height, formatted_date, person_name)
+            text_y = rect_y - 20
+
+        c.setFont("Helvetica-Bold", 8)
+        initial_bal_qty = round(initial_bal_qty, 3)
+        initial_bal_val = round(initial_bal_val, 3)
+        c.drawString(x_item_id + 10.5 * cm, text_y, "Total Closing :")
+        c.drawString(x_item_id + 14 * cm, text_y, str(initial_bal_qty))
+        c.drawString(x_item_id + 17 * cm, text_y, str(initial_bal_val))
+        text_y -= 20
 
         c.save()
         status = "success"
