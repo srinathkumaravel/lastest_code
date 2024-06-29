@@ -1,4 +1,4 @@
-from reportlab.lib.pagesizes import letter
+from reportlab.lib.pagesizes import letter, landscape
 from reportlab.pdfgen import canvas
 from reportlab.lib.units import cm
 from reportlab.platypus import Table
@@ -7,6 +7,7 @@ import os
 import pandas as pd
 from datetime import datetime
 from database import get_database_engine_e_eiis
+from po_date_merged_PDF import merge_pdfs
 
 
 def fetch_cwh_list(engine):
@@ -43,7 +44,7 @@ def fetch_datas_for_item_full_trans(month, year):
     try:
         engine = get_database_engine_e_eiis()
         df_query = """
-                    SELECT 
+                     SELECT 			
                         t.SUPP_ID,
                         t.SUPP_NAME,
                         t.TRAN_LOC_ID,
@@ -59,21 +60,20 @@ def fetch_datas_for_item_full_trans(month, year):
                                  WHERE ITEM_ID = t.ITEM_ID AND CWH_DEL_ID = t.OUR_TRANS_IS)
                             ELSE t.CP 
                         END AS CP,
-                        s.OP_QTY AS OpeningQty,
-                        s.OP_CP AS OpeningCP,
+                        COALESCE((SELECT OP_QTY FROM stock WHERE ITEM_ID = t.ITEM_ID),0)AS OpeningQty,
+                        COALESCE((SELECT OP_GP FROM stock WHERE ITEM_ID = t.ITEM_ID ),0) AS OpeningCP,                        
                         t.ITEM_ID,
                         t.PACKAGE_ID,
                         t.ITEM_NAME,
                         t.LAST_DATE
                     FROM 
                         traninter t
-                    JOIN 
-                        stock s ON t.ITEM_ID = s.ITEM_ID AND t.PACKAGE_ID = s.PACKAGE_ID
                     WHERE 
                         MONTH(t.TRANS_DATE) = %s
                         AND YEAR(t.TRANS_DATE) = %s
                     ORDER BY 
-                        t.ITEM_ID;
+                        t.ITEM_ID,
+                        t.LAST_DATE ASC; 
                    """
         df = pd.read_sql_query(df_query, engine, params=(month, year))
         # Renaming columns
@@ -285,8 +285,14 @@ def create_item_full_trans_pdf(new_dfs_list, item_id_list, item_name_list, packi
                                opening_cp_list, bal_qty_total_list, bal_val_total_list):
     initial_bal_qty = 0
     initial_bal_val = 0
-    file_name = None
-    file_with_path = None
+    merged_pdf_file_name = None
+    output_path = None
+    new_item_id: list = []
+    new_item_name: list = []
+    new_package_id: list = []
+    new_closing_qty: list = []
+    new_closing_val: list = []
+
     try:
         person_name = "administrator"
         current_datetime = datetime.now()
@@ -411,9 +417,15 @@ def create_item_full_trans_pdf(new_dfs_list, item_id_list, item_name_list, packi
                         c, width, height, formatted_date, person_name)
                     text_y = rect_y - 20
 
+                new_item_id.append(item_id)
+                new_item_name.append(item_name)
+                new_package_id.append(package_id)
+                new_closing_qty.append(bal_qty)
+                new_closing_val.append(bal_val)
+
                 c.setFont("Helvetica-Bold", 8)
                 c.drawString(x_item_id + 14.4 * cm, text_y, "Closing :")
-                initial_bal_qty = initial_bal_val + bal_qty
+                initial_bal_qty = initial_bal_qty + bal_qty
                 initial_bal_val = initial_bal_val + bal_val
                 c.drawString(x_item_id + 16.8 * cm, text_y, str(bal_qty))
                 c.drawString(x_item_id + 18.8 * cm, text_y, str(bal_val))
@@ -452,10 +464,152 @@ def create_item_full_trans_pdf(new_dfs_list, item_id_list, item_name_list, packi
         c.drawString(x_item_id + 14 * cm, text_y, str(initial_bal_qty))
         c.drawString(x_item_id + 17 * cm, text_y, str(initial_bal_val))
         text_y -= 20
+        c.save()
+
+        # Creating a dictionary from lists
+        data = {
+            'Item ID': new_item_id,
+            'Item Name': new_item_name,
+            'Package ID': new_package_id,
+            'Closing Qty': new_closing_qty,
+            'Closing Val': new_closing_val
+        }
+
+        # Creating a DataFrame
+        closing_balance_df = pd.DataFrame(data)
+        closing_balance_df.to_excel('closingval.xlsx')
+
+        # Adding auto-generated serial number as the first column
+        closing_balance_df.insert(0, 'S.No', range(1, len(closing_balance_df) + 1))
+
+        closing_balance_pdf_status, closing_balance_pdf_file_with_path = create_closing_balance_pdf(closing_balance_df,
+                                                                                                    formatted_date, initial_bal_qty, initial_bal_val)
+        pdf_file_name = [file_with_path, closing_balance_pdf_file_with_path]
+        # Output folder path for the merged PDF
+        output_folder = r'C:\Users\Administrator\Downloads\eiis\item_full_transaction\Merged_files'
+
+        # Ensure the output folder exists, create it if not
+        if not os.path.exists(output_folder):
+            os.makedirs(output_folder)
+
+        merged_pdf_file_name = "ITEM_FULL_TRANSACTION_WITH_CLOSING_BALANCE_" + current_date_time_str + '.pdf'
+        # Output file path for the merged PDF
+        output_path = os.path.join(output_folder, merged_pdf_file_name)
+        # Merge the PDFs
+        pdf_status, output_path = merge_pdfs(pdf_file_name, output_path)
+
+    except Exception as error:
+        print('The Cause of error -->', error)
+        pdf_status = "failed"
+
+    return merged_pdf_file_name, output_path, pdf_status
+
+
+def create_closing_balance_pdf(closing_balance_df, formatted_date, initial_bal_qty, initial_bal_val):
+    closing_balance_pdf_file_with_path = None
+    try:
+        person_name = "administrator"
+        current_datetime = datetime.now()
+        current_date_time_str = current_datetime.strftime("%Y_%m_%d_%H_%M_%S")
+        closing_balance_pdf_file_name = f'ITEM_FULL_TRANSACTION_CLOSING_VALUE_{current_date_time_str}.pdf'
+        closing_balance_pdf_file_path = r"C:\Users\Administrator\Downloads\eiis\item_full_transaction"
+        closing_balance_pdf_file_with_path = os.path.join(closing_balance_pdf_file_path, closing_balance_pdf_file_name)
+
+        # Create a canvas object with landscape orientation
+        c = canvas.Canvas(closing_balance_pdf_file_with_path, pagesize=landscape(letter))
+        width, height = landscape(letter)
+
+        rect_y, top_margin, left_margin, bottom_margin, right_margin, rect_x, rect_height, rect_width = draw_header_and_details(
+            c, width, height, formatted_date, person_name)
+        text_y = rect_y - 20
+        # Known row height in points
+        row_height = 18.19685
+
+        # Calculate available vertical space
+        available_space = text_y - bottom_margin
+
+        # Calculate the number of rows that can fit within the available space
+        rows_per_chunk = int(available_space / row_height)
+
+        # Adjust rows_per_chunk to account for not splitting header and data rows unevenly
+        # If the header is always included and needs one row by itself:
+        rows_per_chunk -= 1  # Adjust for the header if it is included in each chunk
+        print('rows_per_chunk', rows_per_chunk)
+
+        chunks = [closing_balance_df[i:i + rows_per_chunk] for i in range(0, len(closing_balance_df), rows_per_chunk)]
+
+        for i, chunk in enumerate(chunks):
+            table_y = text_y  # Start the table below the second rectangle
+
+            df_data = chunk.values.tolist()
+            df_headers = chunk.columns.tolist()
+
+            # Create the table
+            colWidths = [2.0 * cm, 4.7 * cm, 8.0 * cm, 4.0 * cm]
+
+            df_table = Table([df_headers] + df_data, colWidths=colWidths)
+            # Styling the table
+
+            # Styling the table
+            df_table.setStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.white),  # Header background
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),  # Header text color
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),  # Center align text for all cells
+                ('ALIGN', (0, 1), (1, -1), 'LEFT'),  # Left align text in the first and second columns
+                ('ALIGN', (2, 1), (2, -1), 'LEFT'),  # Left align text in the third column
+                ('ALIGN', (3, 1), (3, -1), 'RIGHT'),  # Right align text in the fourth column
+                ('ALIGN', (4, 1), (4, -1), 'RIGHT'),  # Right align text in the fifth column
+                ('ALIGN', (5, 1), (5, -1), 'RIGHT'),  # Right align text in the sixth column
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),  # Header font
+                ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),  # Body font
+                ('FONTSIZE', (0, 0), (-1, -1), 6.0),  # Font size for all cells
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 0.1),  # Padding below text
+                ('TOPPADDING', (0, 0), (-1, -1), 5),  # Padding above text
+                ('GRID', (0, 0), (-1, -1), 1, colors.black)  # Grid lines
+            ])
+
+            # Calculate the height of the table
+            df_table_height = df_table.wrap(0, 0)[1]
+            row_height = df_table.wrap(0, 0)  # Get the height of the header and a single row
+            print('row_height---->', row_height)
+
+            table_width = width - 2 * left_margin  # Width of the table
+            df_table.wrapOn(c, table_width, height)  # Prepare the table for drawing
+            df_table.drawOn(c, left_margin, table_y - df_table_height)  # Position and draw the table
+
+            # Move to the next page if there are more chunks
+            if i < len(chunks) - 1:
+                # Header and bottom details
+                c.showPage()
+                rect_y, top_margin, left_margin, bottom_margin, right_margin, rect_x, rect_height, rect_width = draw_header_and_details(
+                    c, width, height, formatted_date, person_name)
+                text_y = rect_y - 20
+
+            else:
+                # Draw "Closing :" and its value
+                text_y = text_y - df_table_height  # Move down below the table
+                # Known row height in points
+                row_height = 18.19685
+
+                # Calculate available vertical space
+                available_space = text_y - bottom_margin
+                if available_space < 0.8:
+                    c.showPage()
+                    rect_y, top_margin, left_margin, bottom_margin, right_margin, rect_x, rect_height, rect_width = draw_header_and_details(
+                        c, width, height, formatted_date, person_name)
+                    text_y = rect_y - 20
+                text_y = text_y - 0.5 * cm
+                c.setFont("Helvetica-Bold", 8)
+                c.drawString(left_margin + 13.5 * cm, text_y, "Total Closing  :")
+
+                c.drawString(left_margin + 19.4 * cm, text_y, str(initial_bal_qty))
+
+                c.drawString(left_margin + 24.0 * cm, text_y, str(initial_bal_val))
 
         c.save()
-        status = "success"
-    except Exception as Error:
-        print('The cause of error -->', Error)
-        status = "failed"
-    return file_name, file_with_path, status
+        closing_balance_pdf_status = "success"
+    except Exception as error:
+        print('The cause of error -->', error)
+        closing_balance_pdf_status = "failed"
+
+    return closing_balance_pdf_status, closing_balance_pdf_file_with_path
