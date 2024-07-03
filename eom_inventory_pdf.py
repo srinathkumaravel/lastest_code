@@ -21,23 +21,53 @@ def fetch_data_for_eom_inv(month, year, family_name):
     total_value_total_list = []
     try:
         engine = get_database_engine_e_eiis()
-        df_query = """SELECT a.ITEM_ID, a.ITEM_NAME, a.PACKAGE_ID, b.OP_QTY AS stock_qty, b.OP_CP AS stock_value, b.IN_QTY AS pur_qty,
-                        b.IN_CP AS pur_value, b.OUT_QTY AS del_qty, b.OUT_CP AS del_value, (b.OUT_CP / b.OUT_QTY) AS cost_up,
-                        c.IP02 AS cwh_up, (b.OUT_QTY * c.IP02) AS cwh_value, ((b.OUT_QTY * c.IP02) - b.OUT_CP) AS sav,
-                        (((b.OUT_QTY * c.IP02) - b.OUT_CP) / (b.OUT_QTY * c.IP02) * 100) AS sav_per,
-                        ((b.OP_QTY + b.IN_QTY) - b.OUT_QTY) AS QTY_IN_HAND, (b.OP_CP - b.IN_CP - b.OUT_CP) AS total_value
-                    FROM 
-                        TranInter a
-                    JOIN 
-                        Stock b ON a.ITEM_ID = b.ITEM_ID AND a.PACKAGE_ID = b.PACKAGE_ID  AND a.ENTITY_ID = b.ENTITY_ID
-                    JOIN 
-                        item c ON a.ITEM_ID = c.ITEM_ID
-                    WHERE 
-                        MONTH(a.PERIOD) = %s AND YEAR(a.PERIOD) = %s
-                    GROUP BY 
-                        a.ITEM_ID;
-                    """
+        df_query = """SELECT 
+                        it.ITEM_ID AS ItemId,
+                        it.ITEM_NAME AS ItemName,
+                        it.PACKAGE_ID AS PackageId,
+                        COALESCE(b.OP_QTY, 0) AS stock_qty,
+                        COALESCE(b.OP_GP, 0) AS stock_value,
+                        SUM(CASE WHEN ti.TRANS_TYPE = 'SD' THEN COALESCE(ti.QTY, 0) ELSE 0 END)+
+                        SUM(CASE WHEN ti.TRANS_TYPE = 'LR' THEN COALESCE(ti.QTY, 0) ELSE 0 END) AS pur_qty,
+                        SUM(CASE WHEN ti.TRANS_TYPE = 'SD' THEN COALESCE(ti.GP, 0) ELSE 0 END) +
+                        SUM(CASE WHEN ti.TRANS_TYPE = 'LR' THEN COALESCE(ti.GP, 0) ELSE 0 END) AS pur_value,
+                        SUM(CASE WHEN ti.TRANS_TYPE = 'LD' THEN COALESCE(ti.QTY, 0) ELSE 0 END) +  
+                        SUM(CASE WHEN ti.TRANS_TYPE = 'SD' AND ti.TRAN_LOC_ID != (SELECT CWH FROM entityeiis) THEN COALESCE(ti.QTY, 0) ELSE 0 END) +
+                        SUM(CASE WHEN ti.TRANS_TYPE = 'SR' THEN COALESCE(ti.QTY, 0) ELSE 0 END)  AS del_qty,
+                        (SELECT COALESCE(SUM(QTY * STOCK_GP), 0)
+                         FROM cwhdeldetail
+                         WHERE ITEM_ID = ti.ITEM_ID AND CWH_DEL_ID IN 
+                           (SELECT CWH_DEL_ID FROM cwhdelhead
+                            WHERE MONTH(PERIOD) = MONTH(ti.PERIOD) AND YEAR(PERIOD) = YEAR(ti.PERIOD))
+                        ) + 
+                        SUM(CASE WHEN ti.TRANS_TYPE = 'SD' AND ti.TRAN_LOC_ID != (SELECT CWH FROM entityeiis) THEN COALESCE(ti.GP, 0) ELSE 0 END)+
+                        SUM(CASE WHEN ti.TRANS_TYPE = 'SR' THEN COALESCE(ti.GP, 0) ELSE 0 END) AS del_value,
+                        (((SELECT COALESCE(SUM(QTY * STOCK_GP), 0)
+                         FROM cwhdeldetail
+                         WHERE ITEM_ID = ti.ITEM_ID AND CWH_DEL_ID IN 
+                           (SELECT CWH_DEL_ID FROM cwhdelhead
+                            WHERE MONTH(PERIOD) = MONTH(ti.PERIOD) AND YEAR(PERIOD) = YEAR(ti.PERIOD))
+                        ) + 
+                        SUM(CASE WHEN ti.TRANS_TYPE = 'SD' AND ti.TRAN_LOC_ID != (SELECT CWH FROM entityeiis) THEN COALESCE(ti.GP, 0) ELSE 0 END)+
+                        SUM(CASE WHEN ti.TRANS_TYPE = 'SR' THEN COALESCE(ti.GP, 0) ELSE 0 END)) / 
+                        (SUM(CASE WHEN ti.TRANS_TYPE = 'LD' THEN COALESCE(ti.QTY, 0) ELSE 0 END) +  
+                        SUM(CASE WHEN ti.TRANS_TYPE = 'SD' AND ti.TRAN_LOC_ID != (SELECT CWH FROM entityeiis) THEN COALESCE(ti.QTY, 0) ELSE 0 END) +
+                        SUM(CASE WHEN ti.TRANS_TYPE = 'SR' THEN COALESCE(ti.QTY, 0) ELSE 0 END))) AS cost_up,
+                        it.IP02 AS cwh_up 
+                    FROM item it
+                    LEFT JOIN Stock b ON b.ITEM_ID = it.ITEM_ID
+                    LEFT JOIN traninter ti ON ti.ITEM_ID = it.ITEM_ID
+                    WHERE MONTH(ti.PERIOD) = %s AND YEAR(ti.PERIOD) = %s
+                    GROUP BY it.ITEM_ID;
+                                        """
         df = pd.read_sql_query(df_query, engine, params=(month, year))
+        # Multiply two columns and create a new column
+        df['cwh_value'] = df['cwh_up'] * df['del_qty']
+        df['sav'] = df['cwh_value'] - df['del_value']
+        df['sav'] = df['cwh_value'] - df['del_value']
+        df['sav_per'] = (df['sav'] / df['cwh_value']) * 100
+        df['QTY_IN_HAND'] = df['stock_qty'] + df['pur_qty'] - df['del_qty']
+        df['total_value'] = df['stock_value'] + df['pur_value'] - df['del_value']
         # Round all columns except the first three to 2 decimal places
         df.iloc[:, 3:] = df.iloc[:, 3:].round(3)
         # Query to fetch item categories
@@ -56,9 +86,9 @@ def fetch_data_for_eom_inv(month, year, family_name):
         print(family_names)
 
         # Add 'Family ID' column based on the first two characters of 'ITEM_ID'
-        df['Family ID'] = df['ITEM_ID'].astype(str).str[:2]
+        df['Family ID'] = df['ItemId'].astype(str).str[:2]
         # Convert column 'A' from int to str
-        df['ITEM_ID'] = df['ITEM_ID'].astype(str)
+        df['ItemId'] = df['ItemId'].astype(str)
         # Map 'Family ID' to 'Family Name' using the family_names dictionary
         df['Family Name'] = df['Family ID'].map(family_names)
         if len(family_name) != 0:
@@ -80,9 +110,9 @@ def fetch_data_for_eom_inv(month, year, family_name):
             total_value_total_list.append((round(dfs['total_value'].sum(), 3)))
             # Renaming columns
             dfs = dfs.rename(columns={
-                'ITEM_ID': 'Item ID',
-                'ITEM_NAME': 'Item Name',
-                'PACKAGE_ID': 'Pack ID',
+                'ItemId': 'Item ID',
+                'ItemName': 'Item Name',
+                'PackageId': 'Pack ID',
                 'stock_qty': 'Qty',
                 'stock_value': 'Val',
                 'pur_qty': 'Qty',
@@ -366,6 +396,8 @@ def create_eom_inv__pdf(new_dfs_list, family_name_list, formatted_date, stock_va
                 sav_val_inc += round(sav_val, 3)
                 sav_per_val_inc += round(sav_per_val, 3)
                 total_val_inc += round(total_val, 3)
+
+                sav_per_val_per = round((sav_val / cwh_val) * 100, 3)
                 # Draw "Closing :" and its value
                 table_y = next_y - 0.5 * cm # Move down below the table
                 print('df_table_height ------>', df_table_height)
@@ -390,7 +422,7 @@ def create_eom_inv__pdf(new_dfs_list, family_name_list, formatted_date, stock_va
                 c.drawString(left_margin + 16.0 * cm, table_y, str(del_val))
                 c.drawString(left_margin + 19.9 * cm, table_y, str(cwh_val))
                 c.drawString(left_margin + 21.6 * cm, table_y, str(sav_val))
-                c.drawString(left_margin + 23.2 * cm, table_y, str(sav_per_val))
+                c.drawString(left_margin + 23.2 * cm, table_y, str(sav_per_val_per))
                 c.drawString(left_margin + 25.6 * cm, table_y, str(total_val))
                 table_y = table_y - 5
                 # Draw a horizontal line below the closing value
@@ -432,8 +464,8 @@ def create_eom_inv__pdf(new_dfs_list, family_name_list, formatted_date, stock_va
         del_val_inc = round(del_val_inc, 3)
         cwh_val_inc = round(cwh_val_inc, 3)
         sav_val_inc = round(sav_val_inc, 3)
-        sav_per_val_inc = round(sav_per_val_inc, 3)
         total_val_inc = round(total_val_inc, 3)
+        sav_per_val_inc = round((sav_val_inc / cwh_val_inc) * 100, 3)
         c.drawString(left_margin + 4 * cm, table_y, "Grand Total :")
         c.drawString(left_margin + 10.2 * cm, table_y, str(stock_val_inc))
         c.drawString(left_margin + 12.9 * cm, table_y, str(pur_val_inc))
