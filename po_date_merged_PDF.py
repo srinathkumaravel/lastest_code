@@ -113,6 +113,45 @@ def merge_pdfs(pdf_files, output_path):
     return status, output_path
 
 
+def add_page_numbers(input_pdf, output_file_with_page_number):
+    try:
+        # Read the existing PDF
+        reader = PdfReader(input_pdf)
+        writer = PdfWriter()
+
+        # Create a PDF with page numbers
+        packet = BytesIO()
+        can = canvas.Canvas(packet, pagesize=letter)
+
+        # Add page numbers
+        for page_num in range(1, len(reader.pages) + 1):
+            can.setFont("Helvetica", 10)
+            can.drawString(300, 10, f"Page {page_num}")
+            can.showPage()
+
+        can.save()
+
+        # Move to the beginning of the StringIO buffer
+        packet.seek(0)
+        new_pdf = PdfReader(packet)
+
+        # Merge each page with the new page numbers
+        for page_num in range(len(reader.pages)):
+            page = reader.pages[page_num]
+            page.merge_page(new_pdf.pages[page_num])
+            writer.add_page(page)
+
+        # Write the output PDF
+        with open(output_file_with_page_number, 'wb') as output_file:
+            writer.write(output_file)
+        status = "success"
+    except Exception as error:
+        print('The cause of error -->', error)
+        status = "failed"
+        output_file_with_page_number = None
+    return output_file_with_page_number, status
+
+
 def draw_header_and_details(c, width, height, address_info_details, attn, currency_id,
                             currency_rate, fax_no, tel_no, person_name, term_of_payment):
     left_margin = 28
@@ -276,6 +315,9 @@ def create_po_merge_pdf(nested_po_heads, df_list, total_value_list, po_number, l
         person_name = "administrator"
         fixed_table_len = 26
         row_height = 20
+        page_num_status = 'failed'
+        pdf_with_page_num = None
+        output_file_with_page_number = None
         for address_index, sub_list in zip(address_index_list, index_nested_list):
             print(address_index)
             address_info = nested_po_heads[address_index]
@@ -404,7 +446,7 @@ def create_po_merge_pdf(nested_po_heads, df_list, total_value_list, po_number, l
                     pass
                 else:
                     len_of_df_list = (len(df_list))
-                    index = index+1
+                    index = index + 1
                     print(index)
                     # Replacing the value at the specified index
                     print(len(df_list))
@@ -438,16 +480,15 @@ def create_po_merge_pdf(nested_po_heads, df_list, total_value_list, po_number, l
                 c.showPage()
                 # Header and bottom details
                 rect_x, top_margin, left_margin, bottom_margin, right_margin = draw_header_and_details(c, width,
-                                                                                                           height,
-                                                                                                           address_info_details,
-                                                                                                           attn,
-                                                                                                           currency_id,
-                                                                                                           currency_rate,
-                                                                                                           fax_no,
-                                                                                                           tel_no,
-                                                                                                           person_name,
-                                                                                                           term_of_payment)
-
+                                                                                                       height,
+                                                                                                       address_info_details,
+                                                                                                       attn,
+                                                                                                       currency_id,
+                                                                                                       currency_rate,
+                                                                                                       fax_no,
+                                                                                                       tel_no,
+                                                                                                       person_name,
+                                                                                                       term_of_payment)
 
             # Insert "Term of Payment" label in bold
             term_of_payment = str(term_of_payment)  # Example term of payment
@@ -501,12 +542,19 @@ def create_po_merge_pdf(nested_po_heads, df_list, total_value_list, po_number, l
         # Merge the PDFs
         status, output_path = merge_pdfs(pdf_file_name, output_path)
         if status == "success":
-            pdf_status = status
+            output_file_path = r'C:\Users\Administrator\Downloads\eiis\po_updated_pdf\merged_PDF'
+            pdf_with_page_num = "PURCHASE_ORDER_SUPPLIER" + current_date_time_str + '.pdf'
+            # Output file path for the merged PDF
+            output_file_with_page_number = os.path.join(output_file_path, pdf_with_page_num)
+            output_file_with_page_number, page_num_status = add_page_numbers(output_path, output_file_with_page_number)
+            if page_num_status != 'success':
+                output_file_with_page_number = None
+                pdf_with_page_num = None
         else:
-            pdf_status = status
+            page_num_status = status
+
     except Exception as error:
         print('The Cause of error -->', error)
-        pdf_status = "failed"
+        page_num_status = "failed"
 
-    return pdf_status, merged_pdf_file_name, output_path
-
+    return page_num_status, pdf_with_page_num, output_file_with_page_number
