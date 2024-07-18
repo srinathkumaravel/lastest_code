@@ -45,6 +45,10 @@ from waitress import serve
 import os
 from datetime import datetime
 from collections import OrderedDict
+from apscheduler.schedulers.background import BackgroundScheduler
+import atexit
+from stored_proecdure import call_stored_procedure_1, call_stored_procedure_2, call_stored_procedure_3
+from purchase_price_analysis_excel_new import create_purchase_price_excel_report, get_data_for_excel
 
 app = Flask(__name__)
 
@@ -1528,6 +1532,7 @@ def cwh_delivery_details_by_invoice():
             status = "failed"
             return jsonify(status=status)
 
+
 """
 @app.route('/cwh_del_details_by_ind_loc', methods=['POST', 'GET'])
 def cwh_del_details_by_ind_loc():
@@ -1900,7 +1905,7 @@ def purchase_price_analysis_excel_report():
                 try:
                     # Generate download link
                     download_link = f'http://{IP_ADDRESS}:{PORT_NUMBER}/download_excel?file={file_path}'
-                    print('Excel file ready for download')
+                    print("Excel file ready for download")
                     return jsonify(file_path=file_path,
                                    download_link=download_link,
                                    status=report_status,
@@ -2247,6 +2252,64 @@ def download_excel():
             return jsonify(status="failed"), 404
     else:
         return jsonify(status="failed"), 400
+
+
+def create_app():
+    print('scheduler is running ...')
+    # Initialize scheduler
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(func=call_stored_procedure_1, trigger="cron", hour=1, minute=30)
+    scheduler.start()
+
+    # Shut down the scheduler when exiting the app
+    atexit.register(lambda: scheduler.shutdown())
+
+    return app
+
+
+app = create_app()
+
+
+@app.route('/purchase_price_analysis_excel_report_api_latest', methods=['GET', 'POST'])
+def purchase_price_analysis_excel_report_latest():
+    if request.method == 'POST':
+
+        print('CALLING [purchase_price_analysis_excel_report_api_latest] API ...')
+        from_date = request.form.get('from_date')
+        to_date = request.form.get('to_date')
+        excel_type = str(request.form.get('excel_type'))
+        print(f'From Date : {from_date}, To Date : {to_date}, Excel Type : {excel_type}')
+
+        concatenated_df, desired_order, data_message, data_status = get_data_for_excel(from_date, to_date, excel_type)
+
+        if data_status == "success" and data_message == "success":
+            report_status, report_message, file_name, file_path = create_purchase_price_excel_report(concatenated_df,
+                                                                                                     desired_order,
+                                                                                                     excel_type)
+            if report_status == "success":
+                try:
+                    # Generate download link
+                    download_link = f'http://{IP_ADDRESS}:{PORT_NUMBER}/download_excel?file={file_path}'
+                    print('Excel file ready for download')
+                    return jsonify(file_path=file_path,
+                                   download_link=download_link,
+                                   status=report_status,
+                                   fileName=file_name,
+                                   message=report_message)
+
+                except FileNotFoundError:
+                    status = "failed"
+                    print("Excel file not found.")
+                    return jsonify(status=status, message='Excel file not found.'), 404
+            else:
+                status = "failed"
+                return jsonify(status=status, message=status)
+        elif data_message == "No data available" and data_status == "success":
+            return jsonify(status=data_status, message=data_message)
+        else:
+            return jsonify(status=data_status, message=data_message)
+    else:
+        return jsonify(status="Method not allowed. Only POST requests are allowed."), 405
 
 
 serve(app, host='0.0.0.0', port=5001, threads=1000)  # WAITRESS!
