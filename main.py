@@ -49,6 +49,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import atexit
 from stored_proecdure import call_stored_procedure_1, call_stored_procedure_2, call_stored_procedure_3
 from purchase_price_analysis_excel_new import create_purchase_price_excel_report, get_data_for_excel
+from user_rights_excel_report import fetch_and_create_user_rights_excel
 
 app = Flask(__name__)
 
@@ -2193,6 +2194,32 @@ def cwh_del_details_by_ind_loc():
         else:
             status = "failed"
             return jsonify(status=status, message='failed')
+
+
+@app.route('/user_rights_excel_report_api', methods=['GET', 'POST'])
+def user_rights_excel_report_api():
+    if request.method == 'POST':
+        status, message, file_path, file_name = fetch_and_create_user_rights_excel()
+        if message == 'No data available' or message == 'failed':
+            return jsonify(status=status, message=message)
+        else:
+            if status == "success" and message == "success":
+                try:
+                    # Generate download link
+                    download_link = f'http://{IP_ADDRESS}:{PORT_NUMBER}/download_excel?file={file_path}'
+                    print("Excel file ready for download")
+                    return jsonify(file_path=file_path,
+                                   download_link=download_link,
+                                   status=status,
+                                   fileName=file_name,
+                                   message=message)
+
+                except FileNotFoundError:
+                    status = "failed"
+                    print("Excel file not found.")
+                    return jsonify(status=status, message='Excel file not found.'), 404
+    else:
+        return jsonify(status="Method not allowed. Only POST requests are allowed."), 405
 
 
 # method to preview the PDF
