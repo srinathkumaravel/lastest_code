@@ -399,7 +399,7 @@ def create_eom_inv__pdf(new_dfs_list, family_name_list, formatted_date, stock_va
 
                 sav_per_val_per = round((sav_val / cwh_val) * 100, 3)
                 # Draw "Closing :" and its value
-                table_y = next_y - 0.5 * cm # Move down below the table
+                table_y = next_y - 0.5 * cm  # Move down below the table
                 print('df_table_height ------>', df_table_height)
                 print('bottom_margin -------->', bottom_margin)
                 # Calculate available vertical space
