@@ -6,6 +6,7 @@ from database import get_database_engine_e_eiis
 import re
 from openpyxl import load_workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
+from purchasePriceScReports.inventory_excel import fetch_inventory_data
 
 
 def get_data_for_excel(from_date, to_date, excel_type):
@@ -27,13 +28,13 @@ def get_data_for_excel(from_date, to_date, excel_type):
             # Query to fetch item categories
             cash_purchase_query = """SELECT 
                                             PERIOD, 
-                                                    category_name, 
-                                                    category_id, 
-                                                    ITEM_ID, 
-                                                    ITEM_NAME, 
-                                                    PACKAGE_ID, 
-                                                    UOM,
-                                                    QTY, 
+                                            category_name, 
+                                            category_id, 
+                                            ITEM_ID, 
+                                            ITEM_NAME, 
+                                            PACKAGE_ID, 
+                                            UOM,
+                                            QTY, 
                                                     Amt, 
                                                     AvgUnitPrice 
                                                 FROM 
@@ -148,7 +149,7 @@ def get_data_for_excel(from_date, to_date, excel_type):
                     groups[month_year].append(column)
 
             # Create a date range with monthly frequency
-            date_range = pd.date_range(start=from_date, end=to_date, freq='M')
+            date_range = pd.date_range(start=from_date, end=to_date, freq='ME')
 
             # Format the dates to the desired 'Mon-YY' format
             desired_order = date_range.strftime('%b-%y').tolist()
@@ -254,7 +255,7 @@ def get_data_for_excel(from_date, to_date, excel_type):
     return concatenated_df, desired_order, message, status
 
 
-def create_purchase_price_excel_report(concatenated_df, desired_order, excel_type):
+def create_purchase_price_excel_report(concatenated_df, desired_order, excel_type, from_date, to_date):
     file_name = None
     file_path = None
 
@@ -407,8 +408,8 @@ def create_purchase_price_excel_report(concatenated_df, desired_order, excel_typ
         wb.save(file_path)
 
         print(f"Data has been saved to {file_path} starting from the 6th row with adjusted column widths.")
-        status = "success"
-        message = "success"
+
+        status, message = fetch_inventory_data(from_date, to_date, excel_type, file_path)
 
     except Exception as error:
         print('The cause of error -->', error)
