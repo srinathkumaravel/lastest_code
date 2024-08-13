@@ -69,8 +69,8 @@ def fetch_datas_for_item_full_trans(month, year):
                     FROM 
                         traninter t
                     WHERE 
-                        MONTH(t.TRANS_DATE) = %s
-                        AND YEAR(t.TRANS_DATE) = %s
+                        MONTH(t.PERIOD) = %s
+                        AND YEAR(t.PERIOD) = %s
                     ORDER BY 
                         t.ITEM_ID,
                         t.LAST_DATE ASC; 
