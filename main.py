@@ -41,20 +41,55 @@ from purchase_price_analysis_Excel import fetch_data_for_excel_report, create_pu
 from cwh_delivery_details_by_ind_location import fetch_cwh_details_by_ind_loc, \
     fetch_direct_delivery_details_for_ind_loc, create_cwh_pdf_for_ind_loc, fetch_cwh_details_old, \
     fetch_direct_delivery_details_old
+from supplier_invoice_details_by_invoice_new import fetch_supplier_invoice_data_by_supplier_id_new
+from excelReports.eomInventory import create_eom_inv_excel
+from excelReports.creditBookExcel import credit_book_excel
+from excelReports.cwhSavingsExcel import create_cwh_savings_excel
 from waitress import serve
 import os
 from datetime import datetime
 from collections import OrderedDict
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+from apscheduler.executors.pool import ThreadPoolExecutor
 import atexit
-from stored_proecdure import call_stored_procedure_1, call_stored_procedure_2, call_stored_procedure_3
+from stored_proecdure import call_stored_procedure_1
 from purchase_price_analysis_excel_new import create_purchase_price_excel_report, get_data_for_excel
 from user_rights_excel_report import fetch_and_create_user_rights_excel
+
+""""
+def create_app():
+    print('scheduler is running ...')
+    # Initialize scheduler
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(func=call_stored_procedure_1, trigger="cron", hour=1, minute=30)
+    scheduler.start()
+
+    # Shut down the scheduler when exiting the app
+    atexit.register(lambda: scheduler.shutdown())
+
+    return apps
+
+
+apps = create_app()
+
+"""
 
 app = Flask(__name__)
 
 IP_ADDRESS = '137.59.55.54'
 PORT_NUMBER = '5001'
+# Configure the scheduler with an increased misfire grace time
+scheduler = BackgroundScheduler(executors={'default': ThreadPoolExecutor(10)})
+
+# Set a grace period of 60 seconds for misfires
+scheduler.add_job(func=call_stored_procedure_1,
+                  trigger=CronTrigger(hour=1, minute=23),
+                  misfire_grace_time=60)
+scheduler.start()
+
+# Shutdown the scheduler when exiting the app
+atexit.register(lambda: scheduler.shutdown())
 
 
 @app.route('/report_po_number', methods=['POST', 'GET'])
@@ -1136,6 +1171,45 @@ def cwh_savings():
             return jsonify(status=status)
 
 
+@app.route('/cwh_savings_excel_api', methods=['POST', 'GET'])
+def cwh_savings_excel():
+    if request.method == 'POST':
+        month = request.form.get('month')
+        year = request.form.get('year')
+        loc_id = request.form.get('location_id')
+        print(len(loc_id))
+        if len(year) != 0:
+            # Create a datetime object
+            date_obj = datetime(int(year), int(month), 1)
+            # Format the datetime object
+            formatted_date = date_obj.strftime("%B-%Y")
+        else:
+            formatted_date = ""
+
+        (status, df, Savings, Discount, total_sav_disc) = fetch_cwh_saving_data(month, year, loc_id)
+        if status == "success":
+            status, file_name, file_with_path = create_cwh_savings_excel(df, formatted_date)
+        else:
+            return jsonify(status=status)
+
+        if status == "success" and file_with_path is not None:
+            try:
+                # Generate download link
+                download_link = f'http://{IP_ADDRESS}:{PORT_NUMBER}/download_excel?file={file_with_path}'
+                print('Excel file ready for download')
+                return jsonify(file_path=file_with_path,
+                               download_link=download_link,
+                               status=status)
+
+            except FileNotFoundError:
+                print("Excel file not found.")
+                excel_report_status = "failed"
+                return jsonify(status=excel_report_status), 404
+        else:
+            excel_report_status = "failed"
+            return jsonify(status=excel_report_status)
+
+
 @app.route('/cwh_savings_by_loc_api', methods=['POST', 'GET'])
 def cwh_savings_by_loc():
     if request.method == 'POST':
@@ -1242,6 +1316,50 @@ def eom_inventory_pdf():
             except FileNotFoundError:
                 status = "failed"
                 print("PDF file not found.")
+                return jsonify(status=status), 404
+        else:
+            status = "failed"
+            return jsonify(status=status)
+
+
+@app.route('/eom_inventory_excel_api', methods=['POST', 'GET'])
+def eom_inventory_excel():
+    if request.method == 'POST':
+        month = request.form.get('month')
+        year = request.form.get('year')
+        family_name = request.form.get('family_name')
+        # Create a datetime object
+        date_obj = datetime(int(year), int(month), 1)
+
+        # Format the datetime object
+        formatted_date = date_obj.strftime("%B-%Y")
+        (status, new_dfs_list, family_name_list, stock_value_total_list, pur_value_total_list, del_value_total_list,
+         cwh_value_total_list, sav_value_total_list, sav_per_value_total_list,
+         total_value_total_list) = fetch_data_for_eom_inv(month, year, family_name)
+        if status == "success":
+            status, file_path, filename = create_eom_inv_excel(new_dfs_list, family_name_list,
+                                                               formatted_date, stock_value_total_list,
+                                                               pur_value_total_list,
+                                                               del_value_total_list,
+                                                               cwh_value_total_list, sav_value_total_list,
+                                                               sav_per_value_total_list,
+                                                               total_value_total_list)
+        else:
+            return jsonify(status=status)
+
+        if status == "success":
+            try:
+                # Generate download link
+                download_link = f'http://{IP_ADDRESS}:{PORT_NUMBER}/download_excel?file={file_path}'
+                print("Excel file ready for download")
+                return jsonify(file_path=file_path,
+                               download_link=download_link,
+                               status=status,
+                               fileName=filename)
+
+            except FileNotFoundError:
+                status = "failed"
+                print("Excel file not found.")
                 return jsonify(status=status), 404
         else:
             status = "failed"
@@ -1432,6 +1550,75 @@ def supplier_invoice_details_by_delivery_by_supplier_id_pdf():
             return jsonify(status=status)
 
 
+@app.route('/supplier_invoice_details_by_invoice_new_api', methods=['POST', 'GET'])
+def supplier_invoice_details_by_delivery_by_supplier_id_pdf_new():
+    if request.method == 'POST':
+        month = request.form.get('month')
+        year = request.form.get('year')
+        supplier_id = request.form.get('supplier_id')
+        start_date = request.form.get('start_date')
+        end_date = request.form.get('end_date')
+        supp_inv_id = request.form.get('supp_inv_id')
+        report_type = request.form.get('report_type')
+
+        # Set variables to None if their length is 0
+        if len(month) == 0:
+            month = None
+        if len(year) == 0:
+            year = None
+        if len(supplier_id) == 0:
+            supplier_id = None
+        if len(start_date) == 0:
+            start_date = None
+        if len(end_date) == 0:
+            end_date = None
+        if len(supp_inv_id) == 0:
+            supp_inv_id = None
+        if len(report_type) == 0:
+            report_type = None
+
+        if month is not None and year is not None:
+            # Get the full month name
+            month_name = datetime(int(year), int(month), 1).strftime('%b')  # 'Feb'
+
+            # Concatenate month and year with a hyphen
+            period = f"{month_name}-{year}"  # 'Feb-2024'
+        else:
+            period = ''
+        status, file_name, filepath = fetch_supplier_invoice_data_by_supplier_id_new(month, year, supplier_id,
+                                                                                     start_date,
+                                                                                     end_date, supp_inv_id,
+                                                                                     report_type, period)
+
+        if status == "success" and filepath is not None:
+            try:
+                # Read the PDF file data
+                with open(filepath, 'rb') as pdf_file:
+                    pdf_data = pdf_file.read()
+
+                # Create a response with the PDF data and set custom headers
+                response = make_response(pdf_data)
+                response.headers.set('Content-Type', 'application/pdf')
+
+                # Generate download link
+                download_link = f'http://{IP_ADDRESS}:{PORT_NUMBER}/download_pdf?file={filepath}'
+                preview_link = f'http://{IP_ADDRESS}:{PORT_NUMBER}/preview_pdf?file={filepath}'
+                print('PDF file ready for download')
+                return jsonify(pdf=response.data.decode('latin-1'),
+                               download_link=download_link,
+                               preview_link=preview_link,
+                               status=status,
+                               fileName=file_name)
+
+            except FileNotFoundError:
+                status = "failed"
+                print("PDF file not found.")
+                return jsonify(status=status), 404
+        else:
+            status = "failed"
+            return jsonify(status=status)
+
+
 @app.route('/credit_book_api', methods=['POST', 'GET'])
 def credit_book_api():
     if request.method == 'POST':
@@ -1473,6 +1660,43 @@ def credit_book_api():
             except FileNotFoundError:
                 status = "failed"
                 print("PDF file not found.")
+                return jsonify(status=status), 404
+        else:
+            status = "failed"
+            return jsonify(status=status)
+
+
+@app.route('/credit_book_excel_api', methods=['POST', 'GET'])
+def credit_book_excel_api():
+    if request.method == 'POST':
+        month = request.form.get('month')
+        year = request.form.get('year')
+        # Get the full month name
+        month_name = datetime(int(year), int(month), 1).strftime('%b')  # 'Feb'
+
+        # Concatenate month and year with a hyphen
+        period = f"{month_name}-{year}"  # 'Feb-2024'
+        (status, cession_in_out_df, cash_pur_df, credit_pur_df, table_sub_total, sub_total,
+         grand_total) = fetch_credit_book_data(month, year)
+        if status == "success":
+            status, file_path, filename = credit_book_excel(period, cession_in_out_df, cash_pur_df, credit_pur_df,
+                                                            table_sub_total, sub_total, grand_total)
+        else:
+            return jsonify(status=status)
+
+        if status == "success":
+            try:
+                # Generate download link
+                download_link = f'http://{IP_ADDRESS}:{PORT_NUMBER}/download_excel?file={file_path}'
+                print("Excel file ready for download")
+                return jsonify(file_path=file_path,
+                               download_link=download_link,
+                               status=status,
+                               fileName=filename)
+
+            except FileNotFoundError:
+                status = "failed"
+                print("Excel file not found.")
                 return jsonify(status=status), 404
         else:
             status = "failed"
@@ -2281,22 +2505,6 @@ def download_excel():
         return jsonify(status="failed"), 400
 
 
-def create_app():
-    print('scheduler is running ...')
-    # Initialize scheduler
-    scheduler = BackgroundScheduler()
-    scheduler.add_job(func=call_stored_procedure_1, trigger="cron", hour=1, minute=30)
-    scheduler.start()
-
-    # Shut down the scheduler when exiting the app
-    atexit.register(lambda: scheduler.shutdown())
-
-    return app
-
-
-app = create_app()
-
-
 @app.route('/purchase_price_analysis_excel_report_api_latest', methods=['GET', 'POST'])
 def purchase_price_analysis_excel_report_latest():
     if request.method == 'POST':
@@ -2305,14 +2513,15 @@ def purchase_price_analysis_excel_report_latest():
         from_date = request.form.get('from_date')
         to_date = request.form.get('to_date')
         excel_type = str(request.form.get('excel_type'))
-        print(f'From Date : {from_date}, To Date : {to_date}, Excel Type : {excel_type}')
 
         concatenated_df, desired_order, data_message, data_status = get_data_for_excel(from_date, to_date, excel_type)
 
         if data_status == "success" and data_message == "success":
             report_status, report_message, file_name, file_path = create_purchase_price_excel_report(concatenated_df,
                                                                                                      desired_order,
-                                                                                                     excel_type)
+                                                                                                     excel_type,
+                                                                                                     from_date,
+                                                                                                     to_date)
             if report_status == "success":
                 try:
                     # Generate download link
